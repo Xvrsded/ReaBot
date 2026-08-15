@@ -1,0 +1,25 @@
+{
+  "name": "reabot",
+  "version": "1.0.0",
+  "description": "ReaBot - Discord Bot for Community, Verification, Streaming, Events & Moderation",
+  "main": "src/index.js",
+  "scripts": {
+    "bot": "node src/index.js"
+  },
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "discordjs-v14",
+    "moderation",
+    "verification"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.19.0",
+    "discord.js": "^14.27.0",
+    "dotenv": "^16.6.1",
+    "mongodb": "^7.5.0",
+    "mongoose": "^8.24.3"
+  }
+}
