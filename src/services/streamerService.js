@@ -2,7 +2,12 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder
 const config = require('../config/config');
 const logger = require('../utils/logger');
 const StreamerAccount = require('../models/StreamerAccount');
-const axios = require('axios'); // Requires axios for http requests
+
+const monitors = {
+  tiktok: require('./monitors/TikTokMonitor'),
+  twitch: require('./monitors/TwitchMonitor'),
+  youtube: require('./monitors/YouTubeMonitor')
+};
 
 async function initStreamerRegistrationMessage(client) {
   const registrationChannelId = config.channels.streamerRegistration;
@@ -22,33 +27,46 @@ async function initStreamerRegistrationMessage(client) {
         'Punya akun streaming?\n\n' +
         'Daftarkan akun streaming kamu agar member server mendapatkan notifikasi otomatis ketika kamu sedang LIVE.\n\n' +
         'Kamu harus memiliki role Streamer untuk menggunakan fitur ini.\n\n' +
-        'Pilih platform yang ingin kamu daftarkan di bawah.'
+        'Pilih platform yang ingin kamu daftarkan di bawah:'
       );
 
-    const row = new ActionRowBuilder().addComponents(
+    const row1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('streamer_register_tiktok')
-        .setLabel('Register TikTok')
+        .setLabel('TikTok')
         .setEmoji('🎵')
-        .setStyle(ButtonStyle.Primary),
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('streamer_register_twitch')
+        .setLabel('Twitch')
+        .setEmoji('🟣')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('streamer_register_youtube')
+        .setLabel('YouTube')
+        .setEmoji('🔴')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('streamer_my_accounts')
         .setLabel('My Accounts')
         .setEmoji('📋')
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Primary)
     );
 
     // Check recent messages for existing embed to reuse
     const recentMessages = await channel.messages.fetch({ limit: 10 }).catch(() => null);
     const existingMessage = recentMessages?.find(
-      (m) => m.author.id === client.user.id && m.components.some(r => r.components.some(c => c.customId === 'streamer_register_tiktok'))
+      (m) => m.author.id === client.user.id && m.embeds.length > 0 && m.embeds[0].title === '🎥 STREAMER REGISTRATION'
     );
 
     if (existingMessage) {
-      await existingMessage.edit({ embeds: [embed], components: [row] });
+      await existingMessage.edit({ embeds: [embed], components: [row1, row2] });
       logger.info(`Reused existing streamer registration message (${existingMessage.id}).`);
     } else {
-      await channel.send({ embeds: [embed], components: [row] });
+      await channel.send({ embeds: [embed], components: [row1, row2] });
       logger.info('Created new streamer registration message.');
     }
   } catch (err) {
@@ -59,57 +77,82 @@ async function initStreamerRegistrationMessage(client) {
 async function handleStreamerButtons(interaction) {
   const roleId = config.roles.streamer;
 
-  // Check role first
   if (!interaction.member.roles.cache.has(roleId)) {
     return interaction.reply({
-      content: '❌ Kamu tidak memiliki role Streamer.\n\nKamu harus memiliki role Streamer untuk mendaftarkan akun streaming.',
+      content: '❌ Kamu harus memiliki role Streamer untuk mendaftarkan akun streaming.',
       ephemeral: true
     });
   }
 
-  if (interaction.customId === 'streamer_register_tiktok') {
+  if (interaction.customId.startsWith('streamer_register_')) {
+    const platform = interaction.customId.replace('streamer_register_', '');
     const modal = new ModalBuilder()
-      .setCustomId('modal_streamer_tiktok')
-      .setTitle('Register TikTok');
+      .setCustomId(`modal_streamer_${platform}`)
+      .setTitle(`Register ${platform.charAt(0).toUpperCase() + platform.slice(1)}`);
+
+    let placeholder = 'Contoh: gunturgaming';
+    let label = 'Username';
+    if (platform === 'tiktok') placeholder = 'Contoh: @gunturgaming';
+    if (platform === 'youtube') {
+      placeholder = 'URL atau @handle (Cth: @GunturGaming)';
+      label = 'YouTube Channel / Handle';
+    }
 
     const input = new TextInputBuilder()
-      .setCustomId('input_tiktok_username')
-      .setLabel('TikTok Username')
-      .setPlaceholder('Contoh: gunturgaming')
+      .setCustomId('input_username')
+      .setLabel(label)
+      .setPlaceholder(placeholder)
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
     modal.addComponents(new ActionRowBuilder().addComponents(input));
     await interaction.showModal(modal);
+
   } else if (interaction.customId === 'streamer_my_accounts') {
     const accounts = await StreamerAccount.find({ discordUserId: interaction.user.id, guildId: interaction.guild.id });
     
     if (accounts.length === 0) {
-      return interaction.reply({ content: 'ℹ️ Kamu belum mendaftarkan akun streaming apapun.', ephemeral: true });
+      return interaction.reply({ content: 'ℹ️ Kamu belum mendaftarkan akun streaming.', ephemeral: true });
     }
 
     const embed = new EmbedBuilder()
-      .setTitle('🎥 Your Streaming Accounts')
+      .setTitle('🎥 YOUR STREAMING ACCOUNTS')
       .setColor(0x9146FF);
 
-    const row = new ActionRowBuilder();
+    const rows = [];
+    let currentRow = new ActionRowBuilder();
 
     accounts.forEach(acc => {
+      let emoji = '🔗';
+      if (acc.platform === 'tiktok') emoji = '🎵';
+      if (acc.platform === 'twitch') emoji = '🟣';
+      if (acc.platform === 'youtube') emoji = '🔴';
+
+      const platformName = acc.platform.charAt(0).toUpperCase() + acc.platform.slice(1);
+      
       embed.addFields({
-        name: `${acc.platform === 'tiktok' ? '🎵 TikTok' : acc.platform}`,
-        value: `@${acc.username}\nStatus: ${acc.liveStatus ? '🔴 LIVE' : '🟢 Monitoring'}`
+        name: `${emoji} ${platformName}`,
+        value: `${acc.platform === 'youtube' ? '' : '@'}${acc.username}\nStatus: ${acc.liveStatus ? '🟢 LIVE' : '🔴 Monitoring'}`,
+        inline: false
       });
 
-      row.addComponents(
+      if (currentRow.components.length >= 5) {
+        rows.push(currentRow);
+        currentRow = new ActionRowBuilder();
+      }
+
+      currentRow.addComponents(
         new ButtonBuilder()
           .setCustomId(`streamer_remove_${acc._id}`)
-          .setLabel(`Remove ${acc.username}`)
+          .setLabel(`Remove ${platformName}`)
           .setEmoji('🗑️')
           .setStyle(ButtonStyle.Danger)
       );
     });
 
-    return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+    if (currentRow.components.length > 0) rows.push(currentRow);
+
+    return interaction.reply({ embeds: [embed], components: rows, ephemeral: true });
   } else if (interaction.customId.startsWith('streamer_remove_')) {
     const accountId = interaction.customId.replace('streamer_remove_', '');
     const account = await StreamerAccount.findById(accountId);
@@ -123,107 +166,59 @@ async function handleStreamerButtons(interaction) {
     }
 
     await StreamerAccount.findByIdAndDelete(accountId);
-    return interaction.reply({ content: `✅ Berhasil menghapus akun **@${account.username}**.`, ephemeral: true });
+    return interaction.reply({ content: `✅ Berhasil menghapus akun **${account.platform}** Anda.`, ephemeral: true });
   }
 }
 
 async function handleStreamerModals(interaction) {
-  if (interaction.customId === 'modal_streamer_tiktok') {
-    let username = interaction.fields.getTextInputValue('input_tiktok_username');
-    username = username.trim().replace(/^@/, '').toLowerCase();
+  if (interaction.customId.startsWith('modal_streamer_')) {
+    const platform = interaction.customId.replace('modal_streamer_', '');
+    const input = interaction.fields.getTextInputValue('input_username');
 
-    if (!username) {
-      return interaction.reply({ content: '❌ Username TikTok tidak valid.', ephemeral: true });
-    }
+    await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Basic check if it exists globally
-      const existsGlobally = await StreamerAccount.findOne({ guildId: interaction.guild.id, platform: 'tiktok', username });
-      if (existsGlobally) {
-        if (existsGlobally.discordUserId === interaction.user.id) {
-          return interaction.reply({ content: '❌ Akun TikTok tersebut sudah terdaftar.', ephemeral: true });
-        }
-        return interaction.reply({ content: '❌ Akun TikTok tersebut sudah terdaftar sebagai streamer oleh orang lain.', ephemeral: true });
+      const monitor = monitors[platform];
+      if (!monitor) throw new Error('Unsupported platform');
+
+      const resolved = await monitor.resolveUser(input);
+      if (!resolved) {
+        return interaction.editReply({ content: `❌ Akun ${platform} tidak valid atau tidak ditemukan.` });
       }
 
-      // Simple web validation (TikTok web returns 404 for missing users usually, though it's protected by anti-bot. We do a basic GET).
-      // Note: Full validation in a prod environment requires proper APIs. We use a simple Axios GET here to ensure the profile loads without 404.
-      try {
-        const response = await axios.get(`https://www.tiktok.com/@${username}`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-          },
-          timeout: 5000
-        });
-        if (response.status !== 200) throw new Error('Not found');
-      } catch (err) {
-        // Many times TikTok returns captcha or 403. We'll only block on 404 explicitly.
-        if (err.response && err.response.status === 404) {
-             return interaction.reply({ content: '❌ Akun TikTok tidak ditemukan.\n\nPastikan username yang kamu masukkan benar.', ephemeral: true });
-        }
-        // Proceed if 403 or other errors due to anti-bot.
+      // Check duplicate in same server
+      const existsId = await StreamerAccount.findOne({ guildId: interaction.guild.id, platform, platformUserId: resolved.platformUserId });
+      if (existsId) {
+        if (existsId.discordUserId === interaction.user.id) return interaction.editReply({ content: `❌ Akun ${platform} tersebut sudah terdaftar di akunmu.` });
+        return interaction.editReply({ content: `❌ Akun tersebut sudah terdaftar sebagai streamer lain.` });
+      }
+
+      const existsUser = await StreamerAccount.findOne({ guildId: interaction.guild.id, platform, username: resolved.username });
+      if (existsUser) {
+        return interaction.editReply({ content: `❌ Username ${platform} tersebut sudah terdaftar.` });
       }
 
       const acc = new StreamerAccount({
         guildId: interaction.guild.id,
         discordUserId: interaction.user.id,
-        platform: 'tiktok',
-        username: username,
+        platform: platform,
+        username: resolved.username,
+        displayName: resolved.displayName,
+        platformUserId: resolved.platformUserId,
         enabled: true
       });
 
       await acc.save();
-      return interaction.reply({ content: `✅ Berhasil mendaftarkan akun TikTok **@${username}**!\nBot akan segera memantau status LIVE kamu.`, ephemeral: true });
+      return interaction.editReply({ content: `✅ Berhasil mendaftarkan akun ${platform} **${resolved.displayName || resolved.username}**!\nBot akan memantau status LIVE kamu.` });
     } catch (err) {
-      logger.error('Error saving TikTok account:', err);
-      return interaction.reply({ content: '❌ Terjadi kesalahan pada server saat mendaftarkan akun.', ephemeral: true });
+      logger.error(`Error saving ${platform} account:`, err.message);
+      return interaction.editReply({ content: `❌ Terjadi kesalahan saat memverifikasi akun ${platform}.` });
     }
   }
 }
 
 // Background Monitor
 let isMonitoring = false;
-
-async function checkTikTokLive(account) {
-  try {
-    // Unofficial method to check live via tiktok page
-    // Look for "roomId" > 0 in the page source or other indicators.
-    // NOTE: This is a best-effort approach since TikTok has no public API.
-    const url = `https://www.tiktok.com/@${account.username}/live`;
-    const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-      },
-      timeout: 10000
-    });
-
-    const html = response.data;
-    
-    // TikTok page usually contains SIGI_STATE or indicates if the room is active.
-    // If a user is not live, /live redirects to their profile or shows "LIVE has ended".
-    // Alternatively, a regex to find "roomId":"12345" where 12345 is not empty/null.
-    const isLive = html.includes('"roomId":"') && !html.includes('"roomId":""') && html.includes('room_status":2'); // 2 usually implies active
-
-    // A more lenient check: if the page title explicitly says "LIVE" or the URL didn't redirect.
-    // Actually, just checking if "room_id" exists and has a valid value.
-    const roomMatch = html.match(/"roomId":"(\d+)"/);
-    const actuallyLive = roomMatch && roomMatch[1] && roomMatch[1] !== '0';
-
-    return {
-      isLive: !!actuallyLive,
-      url: `https://www.tiktok.com/@${account.username}/live`
-    };
-  } catch (err) {
-    if (err.response && err.response.status === 404) {
-       // Account not found or deleted
-       return { isLive: false, url: null };
-    }
-    logger.warn(`Failed to check TikTok account @${account.username}: ${err.message}`);
-    return null; // Return null so we don't accidentally mark offline on network error
-  }
-}
 
 async function startStreamMonitor(client) {
   if (isMonitoring) return;
@@ -240,64 +235,82 @@ async function startStreamMonitor(client) {
       
       if (!channel) return;
 
+      // Group accounts by platform to optimize/batch if needed, but for now we poll individually safely
       for (const account of accounts) {
-        account.lastCheckedAt = new Date();
-        
+        const monitor = monitors[account.platform];
+        if (!monitor) continue;
+
         let result = null;
-        if (account.platform === 'tiktok') {
-          result = await checkTikTokLive(account);
+        try {
+          result = await monitor.checkLiveStatus(account);
+        } catch (err) {
+          logger.warn(`Unhandled monitor error for ${account.platform}: ${err.message}`);
+          continue; // skip on error
         }
 
-        if (result === null) continue; // Network error, skip
+        if (result === null) continue; // Network/API error, do NOT change status
 
-        const { isLive, url } = result;
+        const { isLive } = result;
 
         if (isLive && !account.liveStatus) {
           // Went LIVE
           account.liveStatus = true;
           account.lastLiveAt = new Date();
-          account.liveUrl = url;
+          account.liveUrl = result.url;
+          account.streamTitle = result.title;
+          account.category = result.category;
+          account.viewerCount = result.viewerCount;
+          account.thumbnailUrl = result.thumbnailUrl;
           await account.save();
 
+          let embedColor = 0xFF0050; // TikTok
+          if (account.platform === 'twitch') embedColor = 0x9146FF;
+          if (account.platform === 'youtube') embedColor = 0xFF0000;
+
           const embed = new EmbedBuilder()
-            .setTitle('🔴 IS LIVE!')
-            .setColor(0xFF0050)
-            .setDescription(`**@${account.username}** sedang LIVE sekarang!`)
-            .addFields(
-              { name: '🎵 Platform', value: 'TikTok', inline: true },
-              { name: '👤 Streamer', value: `<@${account.discordUserId}>`, inline: true }
-            );
+            .setTitle('🔴 LIVE NOW')
+            .setColor(embedColor)
+            .setDescription(`**${result.displayName}** sedang LIVE!`);
+
+          if (result.title) embed.addFields({ name: '📺 Title', value: result.title, inline: false });
+          if (result.category) embed.addFields({ name: '🎮 Category', value: result.category, inline: true });
+          if (result.viewerCount) embed.addFields({ name: '👀 Viewers', value: result.viewerCount.toString(), inline: true });
+          if (result.thumbnailUrl) embed.setImage(`${result.thumbnailUrl}?t=${Date.now()}`); // cache buster
 
           const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
               .setLabel('Watch Live')
               .setEmoji('🔗')
               .setStyle(ButtonStyle.Link)
-              .setURL(url || `https://www.tiktok.com/@${account.username}/live`)
+              .setURL(result.url)
           );
 
+          const platformEmoji = account.platform === 'tiktok' ? '🎵' : (account.platform === 'twitch' ? '🟣' : '🔴');
+          const platformName = account.platform.charAt(0).toUpperCase() + account.platform.slice(1);
+
           await channel.send({
-            content: `🔴 <@${account.discordUserId}> is LIVE!`,
+            content: `${platformEmoji} **${platformName}** | Hey everyone! <@${account.discordUserId}> is now LIVE!`,
             embeds: [embed],
             components: [row]
           }).catch(err => logger.error('Failed to send live notification:', err));
           
-          logger.info(`[STREAMER] @${account.username} is LIVE`);
+          logger.info(`[STREAMER] ${account.platform} @${account.username} is LIVE`);
 
         } else if (!isLive && account.liveStatus) {
           // Went OFFLINE
           account.liveStatus = false;
           await account.save();
-          logger.info(`[STREAMER] @${account.username} went OFFLINE`);
+          logger.info(`[STREAMER] ${account.platform} @${account.username} went OFFLINE`);
         } else {
           // Still live or still offline, just save lastCheckedAt
+          account.lastCheckedAt = new Date();
           await account.save();
         }
       }
     } catch (err) {
-      logger.error('Error in stream monitor:', err);
+      logger.error('Error in stream monitor loop:', err);
     }
-  }, 120000); // 2 minutes
+  }, 120000); // 2 minutes interval
 }
 
 module.exports = {

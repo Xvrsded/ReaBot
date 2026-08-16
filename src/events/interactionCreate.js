@@ -35,7 +35,7 @@ module.exports = {
     // Handle Button Interactions
     if (interaction.isButton()) {
       try {
-        if (interaction.customId === 'verify') {
+        if (interaction.customId.startsWith('verification_')) {
           await handleVerificationButton(interaction);
         } else if (interaction.customId.startsWith('streamer_')) {
           const { handleStreamerButtons } = require('../services/streamerService');
